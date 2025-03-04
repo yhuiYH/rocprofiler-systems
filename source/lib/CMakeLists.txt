@@ -45,6 +45,7 @@ target_link_libraries(
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-ptl>
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-rocm>
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-rccl>
+        $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-sqlite3>
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-static-libgcc-optional>
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-static-libstdcxx-optional>
         $<BUILD_INTERFACE:rocprofiler-systems::rocprofiler-systems-sanitizer>

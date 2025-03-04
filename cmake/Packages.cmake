@@ -41,6 +41,9 @@ rocprofiler_systems_add_interface_library(rocprofiler-systems-timemory
 rocprofiler_systems_add_interface_library(
     rocprofiler-systems-timemory-config
     "CMake interface library applied to all timemory targets")
+rocprofiler_systems_add_interface_library(
+        rocprofiler-systems-sqlite3
+        "Enables SQLite3 support")
 rocprofiler_systems_add_interface_library(rocprofiler-systems-compile-definitions
                                           "Compile definitions")
 
@@ -187,6 +190,60 @@ if(ROCPROFSYS_USE_ROCM)
     # find_package(amd-smi ${rocprofiler_systems_FIND_QUIETLY} REQUIRED)
     # target_link_libraries(rocprofiler-systems-rocm INTERFACE amd-smi::amd-smi)
 endif()
+
+# ----------------------------------------------------------------------------------------#
+#
+# SQLITE3
+#
+# ----------------------------------------------------------------------------------------#
+
+if(ROCPROFSYS_BUILD_SQLITE3)
+     # checkout submodule if not already checked out or clone repo if no .gitmodules file
+     rocprofiler_systems_checkout_git_submodule(
+        RECURSIVE
+        RELATIVE_PATH external/sqlite
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        TEST_FILE configure
+        REPO_URL https://github.com/sqlite/sqlite
+        REPO_BRANCH "version-3.47.0")
+
+    find_program(
+        MAKE_COMMAND
+        NAMES make gmake
+        PATH_SUFFIXES bin REQUIRED)
+
+    include(ExternalProject)
+    externalproject_add(
+        rocprofiler-systems-sqlite3-build
+        PREFIX ${PROJECT_BINARY_DIR}/external/sqlite/build
+        SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/sqlite
+        BUILD_IN_SOURCE 0
+        CONFIGURE_COMMAND
+            <SOURCE_DIR>/configure --prefix=${PROJECT_BINARY_DIR}/external/sqlite/install
+            --libdir=${PROJECT_BINARY_DIR}/external/sqlite/install/lib --disable-shared
+            --enable-tempstore=yes --enable-all --disable-tcl --with-pic CFLAGS=-O3\ -g1
+        BUILD_COMMAND ${MAKE_COMMAND} install -s
+        INSTALL_COMMAND "")
+
+    target_link_libraries(
+        rocprofiler-systems-sqlite3
+        INTERFACE
+            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/external/sqlite/install/lib/libsqlite3.a>
+        )
+    target_include_directories(
+        rocprofiler-systems-sqlite3 SYSTEM
+        INTERFACE $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/external/sqlite/install/include>
+        )
+    add_dependencies(rocprofiler-systems-sqlite3 rocprofiler-systems-sqlite3-build)
+
+    # find_package(RCCL-Headers ${rocprofiler_systems_FIND_QUIETLY} REQUIRED)
+    # target_link_libraries(rocprofiler-systems-rccl INTERFACE roc::rccl-headers)
+    # rocprofiler_systems_target_compile_definitions(rocprofiler-systems-rccl
+    #                                                INTERFACE ROCPROFSYS_USE_RCCL)
+    else()
+        find_package(SQLite3 REQUIRED)
+        target_link_libraries(rocprofiler-sdk-sqlite3 INTERFACE SQLite3::SQLite3)
+    endif()
 
 # ----------------------------------------------------------------------------------------#
 #

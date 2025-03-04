@@ -193,6 +193,8 @@ rocprofiler_systems_add_option(ROCPROFSYS_BUILD_LIBUNWIND
 rocprofiler_systems_add_option(ROCPROFSYS_BUILD_CODECOV "Build for code coverage" OFF)
 rocprofiler_systems_add_option(ROCPROFSYS_INSTALL_PERFETTO_TOOLS
                                "Install perfetto tools (i.e. traced, perfetto, etc.)" OFF)
+rocprofiler_systems_add_option(ROCPROFSYS_BUILD_SQLITE3
+                               "Enable building sqlite3 library" ON)
 
 if(ROCPROFSYS_USE_PAPI)
     rocprofiler_systems_add_option(ROCPROFSYS_BUILD_PAPI "Build PAPI from submodule" ON)
