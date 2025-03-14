@@ -51,6 +51,7 @@
 #include <rocm_smi/rocm_smi.h>
 
 #include <cassert>
+#include <cstdio> 
 #include <chrono>
 #include <ios>
 #include <sstream>
@@ -59,6 +60,429 @@
 #include <sys/resource.h>
 #include <thread>
 
+#include <sqlite3.h>
+
+
+// FIXME all NOT NULL are removed to avoid not-fill errors
+auto table_schema = R"(
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_metadata" (
+            "id" INTEGER  PRIMARY KEY AUTOINCREMENT,
+            "tag" TEXT,
+            "value" TEXT 
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_string" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "string" TEXT  UNIQUE ON CONFLICT IGNORE
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_node" (
+            "id" INTEGER,
+            "hash" INTEGER,
+            "machine_id" TEXT ,
+            "system_name" TEXT,
+            "hostname" TEXT,
+            "release" TEXT,
+            "version" TEXT,
+            "hardware_name" TEXT,
+            "domain_name" TEXT,
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_process" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "parent_pid" INTEGER,
+            "init" BIGINT,
+            "fini" BIGINT,
+            "start" BIGINT,
+            "end" BIGINT,
+            "command" TEXT,
+            "environment" JSONB DEFAULT "{}",
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            PRIMARY KEY (id, node_id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_thread" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "process_id" INTEGER,
+            "name" TEXT,
+            "start" BIGINT,
+            "end" BIGINT,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (process_id) REFERENCES rocpd_process (id),
+            PRIMARY KEY (id, process_id, node_id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_agent" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "type" TEXT CHECK ("type" IN ('CPU', 'GPU')),
+            "absolute_index" INTEGER,
+            "logical_index" INTEGER,
+            "type_index" INTEGER,
+            "uuid" INTEGER,
+            "name" TEXT,
+            "model_name" TEXT,
+            "vendor_name" TEXT,
+            "product_name" TEXT,
+            "user_name" TEXT,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_queue" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "name" TEXT,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_stream" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "name" TEXT,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- Performance monitoring counters (PMC) descriptions
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_pmc" (
+            "id" INTEGER,
+            "target_arch" TEXT CHECK ("target_arch" IN ('CPU', 'GPU')),
+            "agent_id" INTEGER,
+            "event_code" INT,
+            "instance_id" INTEGER,
+            "name" TEXT,
+            "symbol" TEXT,
+            "description" TEXT,
+            "long_description" TEXT DEFAULT "",
+            "component" TEXT,
+            "units" TEXT DEFAULT "",
+            "value_type" TEXT CHECK ("value_type" IN ('ABS', 'ACCUM', 'RELATIVE')),
+            "block" TEXT,
+            "expression" TEXT,
+            "is_constant" INTEGER,
+            "is_derived" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            PRIMARY KEY (id, agent_id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_code_object" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "agent_id" INTEGER,
+            "uri" TEXT,
+            "load_base" BIGINT,
+            "load_size" BIGINT,
+            "load_delta" BIGINT,
+            "storage_type" TEXT CHECK ("storage_type" IN ('FILE', 'MEMORY')),
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (agent_id) REFERENCES rocpd_agent (id),
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_kernel_symbol" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "code_object_id" INTEGER,
+            "kernel_name" TEXT,
+            "display_name" TEXT,
+            "kernel_object" INTEGER,
+            "kernarg_segment_size" INTEGER,
+            "kernarg_segment_alignment" INTEGER,
+            "group_segment_size" INTEGER,
+            "private_segment_size" INTEGER,
+            "sgpr_count" INTEGER,
+            "arch_vgpr_count" INTEGER,
+            "accum_vgpr_count" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (code_object_id) REFERENCES rocpd_code_object (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- Stores repetitive info for samples
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_track" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "tid" INTEGER,
+            "name_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (name_id) REFERENCES rocpd_string (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- Storage for a region, instant, and counter
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_event" (
+            "id" INTEGER,
+            "category_id" INTEGER,
+            "correlation_id" INTEGER,
+            "stack_id" INTEGER,
+            "parent_stack_id" INTEGER,
+            "args" JSONB DEFAULT "[]", -- TODO this must be removed once rocpd_arg is setlled -- 
+            "metrics" JSONB DEFAULT "{}",
+            "call_stack" JSONB DEFAULT "{}",
+            "line_info" JSONB DEFAULT "{}",
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (category_id) REFERENCES rocpd_string (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- stores arguments for events
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_arg" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "event_id" INTEGER,
+            "position" INTEGER,
+            "type" TEXT,
+            "name" TEXT,
+            "value" TEXT, -- TODO: discuss make it value_id and integer, refer to string table -- 
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id)
+        );
+    
+    -- Region with a start/stop on the same thread (CPU)
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_pmc_event" (
+            "id" INTEGER,
+            "event_id" INTEGER,
+            "pmc_id" INTEGER,
+            "value" REAL DEFAULT 0.0,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (pmc_id) REFERENCES rocpd_pmc (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            PRIMARY KEY (id, event_id)
+        );
+    
+    -- Region with a start/stop on the same thread (CPU)
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_region" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "tid" INTEGER,
+            "start" BIGINT,
+            "end" BIGINT,
+            "name_id" INTEGER,
+            "event_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (name_id) REFERENCES rocpd_string (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- Instantaneous sample
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_sample" (
+            "id" INTEGER,
+            "track_id" INTEGER,
+            "timestamp" BIGINT,
+            "event_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (track_id) REFERENCES _rocpd_track (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_kernel_dispatch" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "agent_id" INTEGER,
+            "kernel_id" INTEGER,
+            "dispatch_id" INTEGER,
+            "queue_id" INTEGER,
+            "stream_id" INTEGER,
+            "start" BIGINT,
+            "end" BIGINT,
+            "private_segment_size" INTEGER,
+            "group_segment_size" INTEGER,
+            "workgroup_size_x" INTEGER,
+            "workgroup_size_y" INTEGER,
+            "workgroup_size_z" INTEGER,
+            "grid_size_x" INTEGER,
+            "grid_size_y" INTEGER,
+            "grid_size_z" INTEGER,
+            "region_name_id" INTEGER,
+            "event_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (agent_id) REFERENCES rocpd_agent (id),
+            FOREIGN KEY (kernel_id) REFERENCES rocpd_kernel_symbol (id),
+            FOREIGN KEY (queue_id) REFERENCES rocpd_queue (id),
+            FOREIGN KEY (stream_id) REFERENCES rocpd_stream (id),
+            FOREIGN KEY (region_name_id) REFERENCES rocpd_string (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            PRIMARY KEY (id)
+        );
+    
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_memory_copy" (
+            "id" INTEGER,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "tid" INTEGER,
+            "start" BIGINT,
+            "end" BIGINT,
+            "name_id" INTEGER,
+            "dst_agent_id" INTEGER,
+            "dst_address" INTEGER,
+            "src_agent_id" INTEGER,
+            "src_address" INTEGER,
+            "size" INTEGER,
+            "queue_id" INTEGER,
+            "stream_id" INTEGER,
+            "region_name_id" INTEGER,
+            "event_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (name_id) REFERENCES rocpd_string (id),
+            FOREIGN KEY (dst_agent_id) REFERENCES rocpd_agent (id),
+            FOREIGN KEY (src_agent_id) REFERENCES rocpd_agent (id),
+            FOREIGN KEY (stream_id) REFERENCES rocpd_stream (id),
+            FOREIGN KEY (queue_id) REFERENCES rocpd_queue (id),
+            FOREIGN KEY (region_name_id) REFERENCES rocpd_string (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            PRIMARY KEY (id)
+        );
+    
+    -- Memory allocations (real memory, virtual memory, and scratch memory)
+    CREATE TABLE IF NOT EXISTS
+        "_rocpd_memory_allocate" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "node_id" INTEGER,
+            "pid" INTEGER,
+            "tid" INTEGER,
+            "agent_id" INTEGER,
+            "type" TEXT CHECK ("type" IN ('ALLOC', 'FREE', 'REALLOC', 'RECLAIM')),
+            "level" TEXT CHECK ("level" IN ('REAL', 'VIRTUAL', 'SCRATCH')),
+            "start" BIGINT,
+            "end" BIGINT,
+            "address" INTEGER,
+            "size" INTEGER,
+            "queue_id" INTEGER,
+            "stream_id" INTEGER,
+            "event_id" INTEGER,
+            "extdata" JSONB DEFAULT "{}",
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (agent_id) REFERENCES rocpd_agent (id),
+            FOREIGN KEY (stream_id) REFERENCES rocpd_stream (id),
+            FOREIGN KEY (queue_id) REFERENCES rocpd_queue (id),
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id)
+        );
+
+        CREATE TABLE IF NOT EXISTS
+        "rocpd_gpu_metrics" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "timestamp" BIGINT,
+            "node_id" INTEGER,
+            "agent_id" INTEGER, 
+            "device_id" INTEGER,
+            "utilization" REAL,
+            "temperature" REAL,
+            "power" REAL,
+            "memory_usage" REAL,
+            "vcn_activity" TEXT, -- Stored as JSON array
+            "jpeg_activity" TEXT, -- Stored as JSON array
+            FOREIGN KEY (node_id) REFERENCES _rocpd_node (id),
+            FOREIGN KEY (agent_id) REFERENCES rocpd_agent (id)
+        );
+    
+    -- View for GPU metrics
+        CREATE VIEW IF NOT EXISTS gpu_metrics AS
+        SELECT 
+            n.id as node_id,
+            n.machine_id,
+            a.id as agent_id,
+            a.type as agent_type,
+            a.absolute_index as gpu_index,
+            t.id as track_id,
+            t.pid,
+            t.tid,
+            s.id as sample_id,
+            s.timestamp,
+            e.id as event_id,
+            e.metrics as metrics
+        FROM _rocpd_node n
+        JOIN rocpd_agent a ON a.node_id = n.id
+        JOIN _rocpd_track t ON t.node_id = n.id
+        JOIN _rocpd_sample s ON s.track_id = t.id
+        JOIN rocpd_event e ON e.id = s.event_id
+        WHERE a.type = 'GPU'
+        ORDER BY s.timestamp;
+    
+    INSERT INTO
+        "rocpd_metadata" (tag, value)
+    VALUES
+        ("schema_version", "3");
+    )";
+    
+    
+    int
+    sql_busy_handler(void* /*data*/, int count)
+    {
+        count = (count < 9) ? count : 8;
+        usleep(1000 * (0x1 << count));
+        return 1;
+    }
+    
+    void
+    execute_raw_sql_statements(sqlite3* conn, std::string_view stmts)
+    {
+        ROCPROFSYS_VERBOSE(1, "sqlite3_exec: %s\n", std::string{stmts}.c_str());
+    
+        //  TODO:
+        //      - translate error code into error message
+        //
+        auto ret = sqlite3_exec(conn, std::string{stmts}.c_str(), nullptr, nullptr, nullptr);
+    
+        if(ret != SQLITE_OK)
+        {
+            ROCPROFSYS_VERBOSE(1, "sqlite3 error %x, in statement: %s\n", ret, std::string{stmts}.c_str());
+        }
+    }
+    
+    struct sql_deferred_transaction
+    {
+        sql_deferred_transaction(sqlite3* conn)
+        : m_conn{conn}
+        {
+            execute_raw_sql_statements(m_conn, "BEGIN DEFERRED TRANSACTION");
+        }
+    
+        ~sql_deferred_transaction() { execute_raw_sql_statements(m_conn, "END TRANSACTION"); }
+    
+        sqlite3* m_conn = nullptr;
+    };
+
+    
 #define ROCPROFSYS_ROCM_SMI_CALL(...)                                                    \
     ::rocprofsys::rocm_smi::check_error(__FILE__, __LINE__, __VA_ARGS__)
 
@@ -279,10 +703,241 @@ data::post_process(uint32_t _dev_id)
 
     ROCPROFSYS_VERBOSE(1, "Post-processing %zu rocm-smi samples from device %u\n",
                        _rocm_smi.size(), _dev_id);
-
     ROCPROFSYS_CI_THROW(!_thread_info, "Missing thread info for thread 0");
     if(!_thread_info) return;
+                        
+    //Open SQLite connection, output to same location as csv
+    // Delete existing database file if it exists to ensure fresh data on each run
 
+    sqlite3* conn        = nullptr;
+    auto output_file = std::string(tim::settings::instance()->get_output_path()) + "/gpu_metrics.db";
+
+    // FILE* check_file = fopen(output_file.c_str(), "r");
+    // if(check_file) {
+    //     fclose(check_file);
+    //     std::remove(output_file.c_str());
+    //     ROCPROFSYS_VERBOSE(1, "Removed existing database file: %s\n", output_file.c_str());
+    // }
+
+    //open db connection
+    sqlite3_open(output_file.c_str(), &conn);
+    sqlite3_busy_handler(conn, &sql_busy_handler, nullptr);
+
+    ROCPROFSYS_VERBOSE(1, "Opened result file: %s\n", output_file.c_str());
+    execute_raw_sql_statements(conn, table_schema);
+
+    // Get the highest existing IDs from the database
+    uint64_t node_id = 1;
+    uint64_t agent_id = 1;
+    uint64_t track_id = 1;
+    uint64_t event_id = 1;
+    uint64_t sample_id = 1;
+    
+    // Query for the max IDs to avoid conflicts
+    sqlite3_stmt* stmt = nullptr;
+    
+    const char* max_node_sql = "SELECT MAX(id) FROM _rocpd_node";
+    if (sqlite3_prepare_v2(conn, max_node_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            node_id = sqlite3_column_int64(stmt, 0) + 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    const char* max_agent_sql = "SELECT MAX(id) FROM rocpd_agent";
+    if (sqlite3_prepare_v2(conn, max_agent_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            agent_id = sqlite3_column_int64(stmt, 0) + 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    const char* max_track_sql = "SELECT MAX(id) FROM _rocpd_track";
+    if (sqlite3_prepare_v2(conn, max_track_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            track_id = sqlite3_column_int64(stmt, 0) + 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    const char* max_event_sql = "SELECT MAX(id) FROM rocpd_event";
+    if (sqlite3_prepare_v2(conn, max_event_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            event_id = sqlite3_column_int64(stmt, 0) + 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    const char* max_sample_sql = "SELECT MAX(id) FROM _rocpd_sample";
+    if (sqlite3_prepare_v2(conn, max_sample_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            sample_id = sqlite3_column_int64(stmt, 0) + 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    ROCPROFSYS_VERBOSE(1, "Starting IDs for device %u: node=%lu, agent=%lu, track=%lu, event=%lu, sample=%lu\n", 
+                        _dev_id, node_id, agent_id, track_id, event_id, sample_id);
+   
+    std::map<std::string, int> gpu_node_agent; 
+    std::string gpu_id  = std::to_string(_dev_id);
+    
+    for(const auto& itr : _rocm_smi)
+    {
+        if(itr.m_dev_id != _dev_id) continue;
+        
+       // Get VCN activities as array
+        std::stringstream vcn_activity;
+        vcn_activity << "[";
+        if(!itr.m_vcn_metrics.empty()) {
+            bool first = true;
+            for(const auto& vcn : itr.m_vcn_metrics.at(_dev_id)) {
+                if (!first) vcn_activity << ",";
+                vcn_activity << vcn;
+                first = false;
+            }
+        } else {
+            vcn_activity << "0";
+        }
+        vcn_activity << "]";
+
+        
+        // Get JPEG activities as array 
+        std::stringstream jpeg_metric;
+        jpeg_metric << "[";
+        if(!itr.m_jpeg_metrics.empty()) {
+            bool first = true;
+            for(const auto& jpeg : itr.m_jpeg_metrics.at(_dev_id)) {
+                if (!first) jpeg_metric << ",";
+                jpeg_metric << jpeg;
+                first = false;
+            }
+        } else {
+            jpeg_metric << "0";
+        }
+        jpeg_metric << "]";
+
+        std::stringstream json_metrics;
+        json_metrics << "{";
+        json_metrics << "\"utilization\": " << itr.m_busy_perc << ",";
+        json_metrics << "\"temperature\": " << itr.m_temp / 1.0e3 << ",";
+        json_metrics << "\"power\": " << itr.m_power / 1.0e6 << ",";
+        json_metrics << "\"memoryUsage\": " << itr.m_mem_usage / static_cast<double>(units::megabyte)  << ",";
+        json_metrics << "\"vcnActivity\": " << vcn_activity.str() << ",";
+        json_metrics << "\"JPEGActivity\": " << jpeg_metric.str()  << ",";
+        json_metrics << "}";
+
+        if (gpu_node_agent.find(gpu_id) == gpu_node_agent.end()) {  
+            // Insert node
+            std::stringstream sql;
+            sql << "INSERT INTO _rocpd_node (id, hash, machine_id) VALUES ("
+                << node_id << ", " << node_id << ", 'local'); ";
+                
+            sql << "INSERT INTO rocpd_agent (id, node_id, type, absolute_index) VALUES ("
+                << agent_id << ", " << node_id << ", 'GPU', " << gpu_id << "); ";
+            
+            execute_raw_sql_statements(conn, sql.str());
+            // Insert into map  
+            gpu_node_agent[gpu_id] = node_id;  
+        } else {  
+            node_id = gpu_node_agent[gpu_id];  
+        }  
+
+
+        std::stringstream sql;
+        sql << "INSERT INTO _rocpd_track (id, node_id) VALUES ("
+            << track_id << ", " << node_id << "); ";
+
+        sql << "INSERT INTO rocpd_event (id, metrics) VALUES ("
+            << event_id << ", '" << json_metrics.str() << "'); ";
+
+        sql << "INSERT INTO _rocpd_sample (id, track_id, timestamp, event_id) VALUES ("
+            << sample_id << ", " << track_id << ", " << itr.m_ts << ", " << event_id << "); ";
+
+        sql << "INSERT INTO rocpd_gpu_metrics (timestamp, node_id, agent_id, device_id, "
+                    << "utilization, temperature, power, memory_usage, vcn_activity, jpeg_activity) VALUES ("
+                    << itr.m_ts << ", "
+                    << node_id << ", "
+                    << agent_id << ", "
+                    << itr.m_dev_id << ", "
+                    << itr.m_busy_perc << ", "
+                    << itr.m_temp / 1.0e3 << ", "
+                    << itr.m_power / 1.0e6 << ", "
+                    << itr.m_mem_usage / static_cast<double>(units::megabyte) << ", "
+                    << "'" << vcn_activity.str() << "', "
+                    << "'" << jpeg_metric.str() << "');";
+
+        execute_raw_sql_statements(conn, sql.str());
+
+        node_id++;
+        agent_id++;
+        
+        track_id++;
+        event_id++;
+        sample_id++;
+    }
+
+    //close db connection
+    sqlite3_close(conn);
+    
+    //
+    //end SQLite hack test
+    //
+
+
+     // Write metrics to CSV file
+     auto output_path = std::string(tim::settings::instance()->get_output_path()) 
+                       + "/gpu_metrics_" + std::to_string(_dev_id) + ".csv";
+     std::ofstream outfile(output_path);
+ 
+     // Write CSV header
+     outfile << "Timestamp,DeviceID,Utilization(%),Temperature(C),Power(W),"
+             << "MemoryUsage(MB),VCN_Activity(%),JPEG_Activity(%)\n";
+ 
+     // Write samples
+     for(const auto& itr : _rocm_smi)
+     {
+         if(itr.m_dev_id != _dev_id) continue;
+ 
+         // Basic metrics
+         outfile << itr.m_ts << ","
+                 << itr.m_dev_id << ","
+                 << itr.m_busy_perc << ","
+                 << itr.m_temp / 1.0e3 << "," // Convert to Celsius
+                 << itr.m_power / 1.0e6 << "," // Convert to Watts
+                 << itr.m_mem_usage / static_cast<double>(units::megabyte) << ",";
+ 
+         // VCN metrics
+        if(!itr.m_vcn_metrics.empty()) {
+            bool first = true;
+            for(const auto& vcn : itr.m_vcn_metrics.at(_dev_id)) {
+                if (!first) outfile << "|";  // Use pipe as separator between multiple VCN values
+                outfile << vcn;
+                first = false;
+            }
+            outfile << ",";
+        } else {
+            outfile << "0,";
+        }
+
+        // JPEG metrics
+        if(!itr.m_jpeg_metrics.empty()) {
+            bool first = true;
+            for(const auto& jpeg : itr.m_jpeg_metrics.at(_dev_id)) {
+                if (!first) outfile << "|";  // Use pipe as separator between multiple JPEG values
+                outfile << jpeg;
+                first = false;
+            }
+            outfile << "\n";
+        } else {
+            outfile << "0\n";
+        }
+     }
+ 
+     outfile.close();
+     ROCPROFSYS_VERBOSE(1, "GPU metrics written to: %s\n", output_path.c_str());
+ 
+// ----- END HACK
     auto _settings = get_settings(_dev_id);
 
     auto _process_perfetto = [&]() {
