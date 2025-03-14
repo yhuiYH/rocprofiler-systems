@@ -49,6 +49,22 @@ if(TRANSPOSE_USE_MPI)
 endif()
 
 add_executable(transpose transpose.cpp)
+
+target_include_directories(transpose PRIVATE
+    ${CMAKE_BINARY_DIR}/include
+    ${PROJECT_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/rocprof-sys-build/include)
+# Look for rocprofiler-systems package
+find_package(rocprofiler-systems QUIET)
+if(rocprofiler-systems_FOUND)
+    target_compile_definitions(transpose PRIVATE  ROCPROFSYS_CAUSAL_ENABLED=1)
+    target_include_directories(transpose PRIVATE ${rocprofiler-systems_INCLUDE_DIRS})
+    target_link_libraries(transpose PRIVATE rocprofiler-systems::rocprofiler-systems)
+else()
+    # Fallback to direct path if package not found
+    target_compile_definitions(transpose PRIVATE ROCPROFSYS_CAUSAL_ENABLED=0)
+endif()
+
 target_link_libraries(transpose PRIVATE Threads::Threads)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang"

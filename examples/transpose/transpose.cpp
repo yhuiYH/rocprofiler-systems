@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <rocprofiler-systems/causal.h>
 
 static std::mutex print_lock{};
 using auto_lock_t = std::unique_lock<std::mutex>;
@@ -140,6 +141,7 @@ run(int rank, int tid, hipStream_t stream, int argc, char** argv)
     auto t1 = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < nitr; ++i)
     {
+        ROCPROFSYS_CAUSAL_PROGRESS_NAMED("iteration");
         transpose_a<<<grid, block, 0, stream>>>(in, out, M, N);
         check_hip_error();
         if(i % nsync == (nsync - 1)) HIP_API_CALL(hipStreamSynchronize(stream));
