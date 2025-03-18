@@ -720,18 +720,30 @@ data::post_process(uint32_t _dev_id)
     //Open SQLite connection, output to same location as csv
     // Delete existing database file if it exists to ensure fresh data on each run
 
-    sqlite3* conn        = nullptr;
+    sqlite3* conn = nullptr;
     auto output_file = std::string(tim::settings::instance()->get_output_path()) + "/gpu_metrics.db";
 
-    // FILE* check_file = fopen(output_file.c_str(), "r");
-    // if(check_file) {
-    //     fclose(check_file);
-    //     std::remove(output_file.c_str());
-    //     ROCPROFSYS_VERBOSE(1, "Removed existing database file: %s\n", output_file.c_str());
-    // }
+    // Uncomment and improve the file deletion code to ensure we get a fresh database each run
+    FILE* check_file = fopen(output_file.c_str(), "r");
+    if(check_file) {
+        fclose(check_file);
+        if(std::remove(output_file.c_str()) == 0) {
+            ROCPROFSYS_VERBOSE(1, "Removed existing database file: %s\n", output_file.c_str());
+        }
+        else {
+            ROCPROFSYS_VERBOSE(0, "Failed to remove existing database file: %s (error: %s)\n", 
+                               output_file.c_str(), strerror(errno));
+        }
+    }
 
     //open db connection
-    sqlite3_open(output_file.c_str(), &conn);
+    int rc = sqlite3_open(output_file.c_str(), &conn);
+    if(rc != SQLITE_OK) {
+        ROCPROFSYS_VERBOSE(0, "Failed to open database: %s (error: %s)\n", 
+                          output_file.c_str(), sqlite3_errmsg(conn));
+        sqlite3_close(conn);
+        return;
+    }
     sqlite3_busy_handler(conn, &sql_busy_handler, nullptr);
 
     ROCPROFSYS_VERBOSE(1, "Opened result file: %s\n", output_file.c_str());
