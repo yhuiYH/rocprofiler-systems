@@ -415,6 +415,17 @@ auto table_schema = R"(
             FOREIGN KEY (agent_id) REFERENCES rocpd_agent (id)
         );
     
+    -- New rocpd_metric table for performance metrics
+    CREATE TABLE IF NOT EXISTS
+        "rocpd_metric" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "event_id" INTEGER,
+            "name_id" INTEGER,
+            "value" TEXT,
+            FOREIGN KEY (event_id) REFERENCES rocpd_event (id),
+            FOREIGN KEY (name_id) REFERENCES rocpd_string (id)
+        );
+
     -- View for GPU metrics
         CREATE VIEW IF NOT EXISTS gpu_metrics AS
         SELECT 
@@ -779,6 +790,26 @@ data::post_process(uint32_t _dev_id)
     ROCPROFSYS_VERBOSE(1, "Starting IDs for device %u: node=%lu, agent=%lu, track=%lu, event=%lu, sample=%lu\n", 
                         _dev_id, node_id, agent_id, track_id, event_id, sample_id);
    
+    // --- New block: populate GPU metric names into rocpd_string ---
+    {
+        std::map<std::string, int> gpu_metric_names = {
+            {"Utilization", 1},
+            {"Temperature", 2},
+            {"Power", 3},
+            {"MemoryUsage", 4},
+            {"VCN Activity", 5},
+            {"JPEG Activity", 6}
+        };
+        std::stringstream sql_metric_names;
+        for(const auto& pair : gpu_metric_names)
+        {
+            sql_metric_names << "INSERT OR IGNORE INTO rocpd_string (id, string) VALUES ("
+                             << pair.second << ", '" << pair.first << "'); ";
+        }
+        execute_raw_sql_statements(conn, sql_metric_names.str());
+    }
+    // --- End new block ---
+
     std::map<std::string, int> gpu_node_agent; 
     std::string gpu_id  = std::to_string(_dev_id);
     
@@ -866,6 +897,29 @@ data::post_process(uint32_t _dev_id)
                     << itr.m_mem_usage / static_cast<double>(units::megabyte) << ", "
                     << "'" << vcn_activity.str() << "', "
                     << "'" << jpeg_metric.str() << "');";
+
+        // --- New block: populate rocpd_metric with GPU metrics ---
+        // Cast double metrics to int for storage.
+        int util   = static_cast<int>(itr.m_busy_perc);
+        int temp   = static_cast<int>(itr.m_temp / 1.0e3);
+        int power  = static_cast<int>(itr.m_power / 1.0e6);
+        int mem    = static_cast<int>(itr.m_mem_usage / static_cast<double>(units::megabyte));
+        // Use the same string representation as the rocpd_gpu_metrics table
+        std::string vcn = "'" + vcn_activity.str() + "'";
+        std::string jpeg = "'" + jpeg_metric.str() + "'";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 1, " << util << "); ";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 2, " << temp << "); ";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 3, " << power << "); ";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 4, " << mem << "); ";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 5, " << vcn << "); ";
+        sql << "INSERT INTO rocpd_metric (event_id, name_id, value) VALUES ("
+            << event_id << ", 6, " << jpeg << "); ";
+        // --- End new block ---
 
         execute_raw_sql_statements(conn, sql.str());
 
