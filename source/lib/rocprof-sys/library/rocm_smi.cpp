@@ -398,7 +398,7 @@ auto table_schema = R"(
             FOREIGN KEY (event_id) REFERENCES rocpd_event (id)
         );
 
-        CREATE TABLE IF NOT EXISTS
+    CREATE TABLE IF NOT EXISTS
         "rocpd_gpu_metrics" (
             "id" INTEGER PRIMARY KEY AUTOINCREMENT,
             "timestamp" BIGINT,
@@ -427,27 +427,27 @@ auto table_schema = R"(
         );
 
     -- View for GPU metrics
-        CREATE VIEW IF NOT EXISTS gpu_metrics AS
-        SELECT 
-            n.id as node_id,
-            n.machine_id,
-            a.id as agent_id,
-            a.type as agent_type,
-            a.absolute_index as gpu_index,
-            t.id as track_id,
-            t.pid,
-            t.tid,
-            s.id as sample_id,
-            s.timestamp,
-            e.id as event_id,
-            e.metrics as metrics
-        FROM _rocpd_node n
-        JOIN rocpd_agent a ON a.node_id = n.id
-        JOIN _rocpd_track t ON t.node_id = n.id
-        JOIN _rocpd_sample s ON s.track_id = t.id
-        JOIN rocpd_event e ON e.id = s.event_id
-        WHERE a.type = 'GPU'
-        ORDER BY s.timestamp;
+    CREATE VIEW IF NOT EXISTS gpu_metrics AS
+    SELECT 
+        n.id as node_id,
+        a.id as agent_id,
+        a.type as agent_type,
+        a.absolute_index as gpu_index,
+        t.id as track_id,
+        s.id as sample_id,
+        s.timestamp,
+        e.id as event_id,
+        st.string as metric_name,
+        m.value as metric_value
+    FROM _rocpd_node n
+    JOIN rocpd_agent a ON a.node_id = n.id
+    JOIN _rocpd_track t ON t.node_id = n.id
+    JOIN _rocpd_sample s ON s.track_id = t.id
+    JOIN rocpd_event e ON e.id = s.event_id
+    JOIN rocpd_metric m ON m.event_id = e.id
+    JOIN rocpd_string st ON st.id = m.name_id
+    WHERE a.type = 'GPU'
+    ORDER BY s.timestamp;
     
     INSERT INTO
         "rocpd_metadata" (tag, value)
