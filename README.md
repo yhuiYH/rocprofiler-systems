@@ -88,7 +88,7 @@ The documentation source files reside in the [`/docs`](/docs) folder of this rep
   - Virtual memory usage
 - Network statistics
 - I/O metrics
-- ... many more
+- ... and many more
 
 ## Quick Start
 
