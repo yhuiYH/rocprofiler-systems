@@ -119,14 +119,16 @@ struct data_processor {
     
     uint32_t find_pmc_id(const std::string& name);
     uint32_t find_string_id(const std::string& str);
+    uint32_t find_gpu_agent_id(const int& type_id);
 
     template <typename... Types>
-    void init_db_counter_cpu_tracks(tim::type_list<Types...>, 
+    void init_db_counter_tracks(tim::type_list<Types...>, 
                                     std::array<const char*, sizeof...(Types)> units = {},
                                     std::array<const char*, sizeof...(Types)> custom_names = {},
+                                    std::string agent_type = "CPU",  
                                     uint32_t agent_id = 0)
     {
-        auto insert_cpu_counter = [this, &units, &custom_names, agent_id](auto _t, size_t idx) {
+        auto insert_cpu_counter = [this, &units, &custom_names, agent_id, &agent_type](auto _t, size_t idx) {
             using type = std::decay_t<decltype(_t)>;
             
             // Use custom name if provided, otherwise use the type trait name
@@ -142,8 +144,15 @@ struct data_processor {
             if (idx < units.size() && units[idx]) {
                 pmc.units = units[idx];
             }        
-            pmc.target_arch = "CPU"; 
-            pmc.agent_id = agent_id; //0
+            
+            pmc.target_arch = agent_type; 
+
+            if ( agent_type == "GPU"){
+                pmc.agent_id = find_gpu_agent_id(agent_id);
+            } else {
+                pmc.agent_id = agent_id; // 0
+            }
+
             pmc.value_type = "ABS";   
             pmc.is_constant = 0;
             pmc.is_derived = 0;
@@ -166,6 +175,7 @@ private:
     data_processor& operator=(const data_processor&) = delete;
 
 private:
+    std::unordered_map<uint32_t, uint32_t> _gpu_agents;
     std::unordered_map<std::string_view, uint32_t> _track_name_map;
     std::unordered_map<category_id, int> _category_map;
     std::unordered_map<std::string, uint32_t> _pmc_name_map; // TODO 

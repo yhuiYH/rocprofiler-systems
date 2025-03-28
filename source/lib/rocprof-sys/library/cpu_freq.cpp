@@ -32,6 +32,7 @@
 #include "core/debug.hpp"
 #include "core/defines.hpp"
 #include "core/perfetto.hpp"
+
 #include "core/timemory.hpp"
 #include "library/components/cpu_freq.hpp"
 #include "library/thread_data.hpp"
@@ -103,7 +104,7 @@ setup()
     >{};
     init_perfetto_counter_tracks(cpu_counters);
     
-    data_processor::get_instance().init_db_counter_cpu_tracks(
+    data_processor::get_instance().init_db_counter_tracks(
         cpu_counters,
         { "MHz", "MB", "MB", "MB", "", "", "sec", "sec" }    
     );
@@ -121,7 +122,7 @@ void config()
         name_storage.push_back(get_cpu_freq_name(cpu));
         const char* name_ptr = name_storage.back().c_str();
         // TODO get the agent_id 
-        data_processor::get_instance().init_db_counter_cpu_tracks(
+        data_processor::get_instance().init_db_counter_tracks(
             type_list<category::cpu_freq>{},
             { "MHz" },              
             { name_ptr }          

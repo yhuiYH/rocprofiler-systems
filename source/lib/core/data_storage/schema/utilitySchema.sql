@@ -690,4 +690,41 @@ SELECT
 FROM
     single_markers SM
 GROUP BY
-    SM.name
+    SM.name;
+
+
+--
+-- Cpu Freq (PMC)
+CREATE VIEW IF NOT EXISTS
+    cpu_freq AS
+SELECT
+    PMC_E.id,
+    S.timestamp,
+    PMC_I.name AS counter_name,
+    PMC_E.value AS counter_value, 
+    PMC_I.description AS counter_description
+FROM
+    rocpd_pmc_event PMC_E
+    INNER JOIN rocpd_pmc PMC_I ON PMC_I.id = PMC_E.pmc_id
+    INNER JOIN rocpd_event E ON E.id = PMC_E.event_id
+    INNER JOIN rocpd_sample S ON S.event_id = E.id;
+
+
+--
+-- RocmSMI (PMC)
+CREATE VIEW IF NOT EXISTS
+    rocm_smi AS
+SELECT
+    PMC_E.id,
+    S.timestamp,
+    A.type_index AS gpu_index,
+    PMC_I.name AS counter_name,
+    PMC_E.value AS counter_value,  
+    PMC_I.description AS counter_description
+FROM
+    rocpd_pmc_event PMC_E
+    INNER JOIN rocpd_pmc PMC_I ON PMC_I.id = PMC_E.pmc_id
+    INNER JOIN rocpd_agent A ON A.id = PMC_I.agent_id
+    INNER JOIN rocpd_event E ON E.id = PMC_E.event_id
+    INNER JOIN rocpd_sample S ON S.event_id = E.id;
+

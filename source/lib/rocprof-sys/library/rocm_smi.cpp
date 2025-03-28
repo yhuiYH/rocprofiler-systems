@@ -35,9 +35,15 @@
 #include "core/data_processing/utils.hpp"
 
 #include "library/rocm_smi.hpp"
+#include "core/categories.hpp" 
 #include "core/common.hpp"
 #include "core/components/fwd.hpp"
 #include "core/config.hpp"
+
+#include "core/data_processing/data_processor.hpp"
+#include "core/data_processing/json.hpp"
+#include "core/data_processing/utils.hpp"
+
 #include "core/debug.hpp"
 #include "core/gpu.hpp"
 #include "core/perfetto.hpp"
@@ -51,6 +57,7 @@
 #include <timemory/units.hpp>
 #include <timemory/utility/delimit.hpp>
 #include <timemory/utility/locking.hpp>
+#include <timemory/utility/type_list.hpp>
 
 #include <rocm_smi/rocm_smi.h>
 
@@ -65,6 +72,17 @@
 
 #define ROCPROFSYS_ROCM_SMI_CALL(...)                                                    \
     ::rocprofsys::rocm_smi::check_error(__FILE__, __LINE__, __VA_ARGS__)
+
+template <typename... Tp>
+using type_list = tim::type_list<Tp...>;
+
+
+namespace {
+    template<typename T>
+    std::string get_category_name(T) {
+        return tim::trait::perfetto_category<T>::value;
+    }
+}
 
 namespace rocprofsys
 {
@@ -306,6 +324,23 @@ data::post_process(uint32_t _dev_id)
 
     if(device_count < _dev_id) return;
 
+    // Initialize GPU counter tracks
+    data_processor::get_instance().init_db_counter_tracks(
+        type_list<category::rocm_smi_busy, category::rocm_smi_temp, category::rocm_smi_power, category::rocm_smi_memory_usage>{},
+        { "%", "°C", "W", "MB" } , {} , "GPU", _dev_id
+    );
+    
+    // Get the PMC IDs
+    auto& dp = data_processor::get_instance();
+    uint32_t busy_id = dp.find_pmc_id(get_category_name(category::rocm_smi_busy{}));
+    uint32_t temp_id = dp.find_pmc_id(get_category_name(category::rocm_smi_temp{}));
+    uint32_t power_id = dp.find_pmc_id(get_category_name(category::rocm_smi_power{}));
+    uint32_t mem_usage_t = dp.find_pmc_id(get_category_name(category::rocm_smi_memory_usage{}));
+
+    // Create track 
+    uint32_t track_id = data_processor::get_instance().add_track({"GPU_FREQ_TRACK", 0, 0, 0, "{}"});
+
+
     auto&       _rocm_smi_v = sampler_instances::get()->at(_dev_id);
     auto        _rocm_smi   = (_rocm_smi_v) ? *_rocm_smi_v : std::deque<rocm_smi::data>{};
     const auto& _thread_info = thread_info::get(0, InternalTID);
@@ -392,16 +427,14 @@ data::post_process(uint32_t _dev_id)
             double _power = itr.m_power / 1.0e6;
             double _usage = itr.m_mem_usage / static_cast<double>(units::megabyte);
 
-            // smi_metric metric(_settings);
-            // metric.busy = _busy;
-            // metric.temp = _temp;
-            // metric.power = _power;
-            // metric.usage = _usage;
-            // (int category_id, int correlation_id, int stack_id, int parent_stack_id, const char* args, const T& metrics, 
-            //     const char* call_stack, const char* line_info,  const char* extdata
-            // const data_processing::event<smi_metric> event(0, 0, 0, 0, "args", metric, "call_stack", " line_info", "ext data");
+             // Create event and sample
+             uint32_t event_id = data_processor::get_instance().add_event({ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
+             uint32_t _sample_id = data_processor::get_instance().add_sample({track_id, _ts, event_id, "{}"});
 
-            // data_processor::get_instance().add_event(event);
+            if (busy_id) dp.add_pmc_event(busy_id, _busy, event_id);
+            if (temp_id) dp.add_pmc_event(temp_id, _temp, event_id);
+            if (power_id) dp.add_pmc_event(power_id, _power, event_id);
+            if (mem_usage_t) dp.add_pmc_event(mem_usage_t, _usage, event_id);
 
 
             if(_settings.busy)

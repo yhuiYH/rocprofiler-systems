@@ -72,6 +72,10 @@ data_processor::create_agent(const data_processor::agent_descriptor& agent) {
                                     .set_values(agent.id, agent.node_id, get_agent_type(agent.type), agent.absolute_index, agent.logical_index, agent.type_index, 
                                                 agent.uuid, agent.name, agent.model_name, agent.vendor_name, agent.product_name, agent.user_name, agent.extdata)
                                     .get_query_string());
+
+    if (std::string(get_agent_type(agent.type)) == "GPU") {
+        this->_gpu_agents[agent.type_index] = agent.id;  
+    }
 }
 
 
@@ -155,11 +159,11 @@ uint32_t data_processor::add_sample(const data_processor::sample_descriptor& sam
                                 >(query);
     }();
 
-    std::cout << "Add sample. Track ID: " << sample.track_id 
-              << ", Timestamp: " << sample.timestamp << std::endl;
+    
+    std::cout << "Add sample. Track ID: " << sample.track_id  << ", Timestamp: " << sample.timestamp << std::endl;
     
     uint32_t id = _sample_id++;
-    _add_sample_stmt(id, sample.track_id, sample.timestamp, sample.event_id, sample.extdata);
+    _add_sample_stmt(id, sample.track_id,  sample.timestamp, sample.event_id, sample.extdata);
     return id;
 }
 
@@ -234,6 +238,15 @@ uint32_t data_processor::find_string_id(const std::string& str) {
         return it->second;
     }
     return create_string(str); 
+}
+
+
+uint32_t data_processor::find_gpu_agent_id(const int& type_id) {  
+    auto it = _gpu_agents.find(type_id);
+    if (it != _gpu_agents.end()) {
+        return it->second;
+    }
+    return 0;
 }
 
 } // namespace rocprofsys
