@@ -24,6 +24,11 @@
 #include "core/common.hpp"
 #include "core/components/fwd.hpp"
 #include "core/config.hpp"
+
+#include "core/data_processing/data_processor.hpp"
+#include "core/data_processing/json.hpp"
+#include "core/data_processing/utils.hpp"
+
 #include "core/debug.hpp"
 #include "core/defines.hpp"
 #include "core/perfetto.hpp"
@@ -68,6 +73,17 @@ void init_perfetto_counter_tracks(type_list<Types...>)
 }  // namespace cpu_freq
 }  // namespace rocprofsys
 
+namespace {
+    template<typename T>
+    std::string get_category_name(T) {
+        return tim::trait::perfetto_category<T>::value;
+    }
+    std::string get_cpu_freq_name(uint64_t cpu) {
+        return "CPU Frequency [" + std::to_string(cpu) + "]";
+    }
+
+}
+
 namespace rocprofsys
 {
 namespace cpu_freq
@@ -75,17 +91,42 @@ namespace cpu_freq
 void
 setup()
 {
-    init_perfetto_counter_tracks(
-        type_list<category::cpu_freq, category::process_page, category::process_virt,
-                  category::process_peak, category::process_context_switch,
-                  category::process_page_fault, category::process_user_mode_time,
-                  category::process_kernel_mode_time>{});
-}
+    auto cpu_counters = type_list<
+        category::cpu_freq,              // CPU frequency
+        category::process_page,          // Memory page usage
+        category::process_virt,          // Virtual memory usage
+        category::process_peak,          // Peak memory usage
+        category::process_context_switch, // Context switches
+        category::process_page_fault,    // Page faults
+        category::process_user_mode_time, // CPU time in user mode
+        category::process_kernel_mode_time // CPU time in kernel mode
+    >{};
+    init_perfetto_counter_tracks(cpu_counters);
+    
+    data_processor::get_instance().init_db_counter_cpu_tracks(
+        cpu_counters,
+        { "MHz", "MB", "MB", "MB", "", "", "sec", "sec" }    
+    );
 
-void
-config()
+}
+void config()
 {
     component::cpu_freq::configure();
+
+    auto& enabled_cpus = component::cpu_freq::get_enabled_cpus();
+    static std::vector<std::string> name_storage;
+    
+    for(const auto& cpu : enabled_cpus)
+    {
+        name_storage.push_back(get_cpu_freq_name(cpu));
+        const char* name_ptr = name_storage.back().c_str();
+        // TODO get the agent_id 
+        data_processor::get_instance().init_db_counter_cpu_tracks(
+            type_list<category::cpu_freq>{},
+            { "MHz" },              
+            { name_ptr }          
+        );
+    }
 }
 
 void
@@ -203,10 +244,31 @@ post_process()
         ROCPROFSYS_CI_THROW(!_thread_info, "Missing thread info for thread 0");
         if(!_thread_info) return;
 
+        // Get the PMC IDs
+        auto& dp = data_processor::get_instance();
+        uint32_t page_id = dp.find_pmc_id(get_category_name(category::process_page{}));
+        uint32_t virt_id = dp.find_pmc_id(get_category_name(category::process_virt{}));
+        uint32_t peak_id = dp.find_pmc_id(get_category_name(category::process_peak{}));
+        uint32_t cntx_id = dp.find_pmc_id(get_category_name(category::process_context_switch{}));
+        uint32_t flts_id = dp.find_pmc_id(get_category_name(category::process_page_fault{}));
+        uint32_t user_id = dp.find_pmc_id(get_category_name(category::process_user_mode_time{}));
+        uint32_t kern_id = dp.find_pmc_id(get_category_name(category::process_kernel_mode_time{}));
+
+        const auto& enabled_cpus = component::cpu_freq::get_enabled_cpus();
+        
+        // Create track 
+        uint32_t track_id = data_processor::get_instance().add_track({"CPU_FREQ_TRACK", 0, 0, 0, "{}"});
+
         for(auto& itr : data)
         {
             uint64_t _ts = std::get<0>(itr);
             if(!_thread_info->is_valid_time(_ts)) continue;
+            
+            // Create event
+            uint32_t cpu_event_id = data_processor::get_instance().add_event({ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
+           
+            // Create sample
+            uint32_t _sample_id = data_processor::get_instance().add_sample({track_id, _ts, cpu_event_id, "{}"});
 
             double   _page = std::get<1>(itr);
             double   _virt = std::get<2>(itr);
@@ -215,6 +277,24 @@ post_process()
             uint64_t _flts = std::get<5>(itr);
             double   _user = std::get<6>(itr);
             double   _kern = std::get<7>(itr);
+
+            if (page_id) dp.add_pmc_event(page_id, _page, cpu_event_id);
+            if (virt_id) dp.add_pmc_event(virt_id, _virt, cpu_event_id);
+            if (peak_id) dp.add_pmc_event(peak_id, _peak, cpu_event_id);
+            if (cntx_id) dp.add_pmc_event(cntx_id, _cntx, cpu_event_id);
+            if (flts_id) dp.add_pmc_event(flts_id, _flts, cpu_event_id);
+            if (user_id) dp.add_pmc_event(user_id, _user, cpu_event_id);
+            if (kern_id) dp.add_pmc_event(kern_id, _kern, cpu_event_id);
+
+            const auto& freq_data = std::get<8>(itr);
+            
+            for(const auto& cpu : enabled_cpus)
+            {
+                std::string cpu_freq_name = get_cpu_freq_name(cpu);
+                uint32_t cpu_freq_name_id = dp.find_pmc_id(cpu_freq_name);
+                if (cpu_freq_name_id) dp.add_pmc_event(cpu_freq_name_id, freq_data.at(cpu), cpu_event_id);
+            }
+        
             write_perfetto_counter_track<category::process_page>(_ts,
                                                                  _page / units::megabyte);
             write_perfetto_counter_track<category::process_virt>(_ts,
@@ -250,5 +330,6 @@ post_process()
     }
     enabled_cpu_freqs.clear();
 }
+
 }  // namespace cpu_freq
 }  // namespace rocprofsys

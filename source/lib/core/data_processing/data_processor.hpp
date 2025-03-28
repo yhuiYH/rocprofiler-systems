@@ -11,6 +11,9 @@
 #include "core/data_storage/database.hpp"
 #include "core/data_storage/queries/table_insert_query.hpp"
 
+#include "core/categories.hpp"      // For tim::trait::perfetto_category
+#include <timemory/mpl/types.hpp>   // For tim::type_list
+
 
 namespace rocprofsys {
 namespace {
@@ -39,10 +42,10 @@ struct data_processor {
         uint64_t id;
         uint32_t node_id;
         agent_type type;
-        uint32_t absolute_index;
-        uint32_t logical_index;
-        uint32_t type_index;
-        uint32_t uuid;
+        int32_t absolute_index;
+        int32_t logical_index;     
+        int32_t type_index;      
+        int64_t uuid;
         const char* name;
         const char* model_name;
         const char* vendor_name;
@@ -63,59 +66,97 @@ struct data_processor {
        const char* extdata;
     };
 
+    struct track_descriptor {
+        std::string name;       
+        int node_id;      
+        int pid;              
+        int tid;    
+        std::string extdata;
+    };
+
+    struct sample_descriptor {
+        uint32_t track_id;     
+        uint64_t timestamp;     
+        uint32_t event_id;     
+        const char* extdata;    
+    };
+
+    struct pmc_descriptor {
+        std::string name;
+        std::string symbol;   
+        std::string target_arch;
+        uint32_t agent_id;
+        int event_code;
+        int instance_id;
+        std::string description;
+        std::string long_description;
+        std::string component; 
+        std::string units;
+        std::string value_type;
+        std::string block;         
+        std::string expression;     
+        int is_constant;
+        int is_derived;
+        std::string extdata;
+    };
+
+
     static data_processor& get_instance();
 
     int create_string(std::string_view str);
 
     void create_agent(const agent_descriptor& agent);
     
-    void create_track(std::string_view name, uint32_t node_id, pid_t pid, std::thread::id tid);
+    uint32_t add_track(const track_descriptor& track);
     
-    /**
-     * @brief record event into database
-     * 
-     * This function logs or registers an event with the given category, correlation, stack, and
-     * parent stack identifiers. It is typically used in systems where events are categorized
-     * and correlated in structured formats for processing, logging, or analysis.
-     * 
-     * @param category_id A unique identifier representing the category of the event.
-     * 
-     * @param correlation_id A unique identifier used to correlate this event with others.
-     * 
-     * @param stack_id A unique identifier representing the stack trace or context from
-     * 
-     * @param parent_stack_id A unique identifier for the parent stack trace or context.
-     */
-    template<typename T>
-    void add_event(const data_processing::event<T>& event) {
-        static auto _add_event_stmt = []{
-            data_storage::queries::table_insert_query query_builder;
-            auto query = query_builder.set_table_name("rocpd_event")
-                                        .set_columns(
-                                            "category_id", "correlation_id", "stack_id", "parent_stack_id", 
-                                            "args", "metrics", "call_stack", "line_info", "extdata")
-                                        .set_values('?', '?', '?', '?', '?', '?', '?', '?', '?')
-                                        .get_query_string();
-            return data_storage::database::get_instance().create_statment_executor<decltype(event.category_id),
-                                                                                    decltype(event.correlation_id),
-                                                                                    decltype(event.stack_id),
-                                                                                    decltype(event.parent_stack_id),
-                                                                                    decltype(event.args),
-                                                                                    const char*,
-                                                                                    decltype(event.call_stack),
-                                                                                    decltype(event.line_info),
-                                                                                    decltype(event.extdata)>(query);                                            
-        }();
+    uint32_t add_event(const event_descriptor& event);
 
-        static std::string metrics;
-        metrics = event.metrics.serialize();
-        std::cout << "Add event. Metrics " << metrics << std::endl;
+    uint32_t add_sample(const sample_descriptor& sample);
+    
+    uint32_t add_pmc(const pmc_descriptor& pmc);
+    
+    void add_pmc_event(uint32_t pmc_id, double value, uint32_t event_id = 0);
+    
+    uint32_t find_pmc_id(const std::string& name);
+    uint32_t find_string_id(const std::string& str);
 
-        _add_event_stmt(event.category_id, event.correlation_id, event.stack_id, event.parent_stack_id, 
-                        event.args, metrics.c_str(), event.call_stack, event.line_info, event.extdata);
-    }
+    template <typename... Types>
+    void init_db_counter_cpu_tracks(tim::type_list<Types...>, 
+                                    std::array<const char*, sizeof...(Types)> units = {},
+                                    std::array<const char*, sizeof...(Types)> custom_names = {},
+                                    uint32_t agent_id = 0)
+    {
+        auto insert_cpu_counter = [this, &units, &custom_names, agent_id](auto _t, size_t idx) {
+            using type = std::decay_t<decltype(_t)>;
+            
+            // Use custom name if provided, otherwise use the type trait name
+            const char* name = (idx < custom_names.size() && custom_names[idx]) 
+                ? custom_names[idx] 
+                : tim::trait::perfetto_category<type>::value;
+            const char* desc = tim::trait::perfetto_category<type>::description;
+            
+            pmc_descriptor pmc;
+            pmc.name = name;
+            pmc.description = desc;
+            // Set units if provided
+            if (idx < units.size() && units[idx]) {
+                pmc.units = units[idx];
+            }        
+            pmc.target_arch = "CPU"; 
+            pmc.agent_id = agent_id; //0
+            pmc.value_type = "ABS";   
+            pmc.is_constant = 0;
+            pmc.is_derived = 0;
+            pmc.event_code = 0;
+            pmc.instance_id = 0;
+            
+            add_pmc(pmc);
+        };
         
-    void add_sample(std::string_view track_name, uint64_t timestamp);
+        // Apply the lambda to each type in the type list with index
+        size_t idx = 0;
+        (insert_cpu_counter(Types{}, idx++), ...);
+    }
 
 private:
     data_processor();
@@ -127,11 +168,14 @@ private:
 private:
     std::unordered_map<std::string_view, uint32_t> _track_name_map;
     std::unordered_map<category_id, int> _category_map;
+    std::unordered_map<std::string, uint32_t> _pmc_name_map; // TODO 
+    std::unordered_map<std::string, uint32_t> _strings_map; // TODO 
 
     uint32_t _track_id{1};
     uint32_t _string_id{1};
     uint32_t _sample_id{1};
     uint32_t _event_id{1};
+    uint32_t _pmc_id = {1};
 };
 
 } // namespace rocprofsys

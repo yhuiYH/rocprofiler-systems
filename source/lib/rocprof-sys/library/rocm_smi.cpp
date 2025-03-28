@@ -392,16 +392,16 @@ data::post_process(uint32_t _dev_id)
             double _power = itr.m_power / 1.0e6;
             double _usage = itr.m_mem_usage / static_cast<double>(units::megabyte);
 
-            smi_metric metric(_settings);
-            metric.busy = _busy;
-            metric.temp = _temp;
-            metric.power = _power;
-            metric.usage = _usage;
+            // smi_metric metric(_settings);
+            // metric.busy = _busy;
+            // metric.temp = _temp;
+            // metric.power = _power;
+            // metric.usage = _usage;
             // (int category_id, int correlation_id, int stack_id, int parent_stack_id, const char* args, const T& metrics, 
             //     const char* call_stack, const char* line_info,  const char* extdata
-            const data_processing::event<smi_metric> event(0, 0, 0, 0, "args", metric, "call_stack", " line_info", "ext data");
+            // const data_processing::event<smi_metric> event(0, 0, 0, 0, "args", metric, "call_stack", " line_info", "ext data");
 
-            data_processor::get_instance().add_event(event);
+            // data_processor::get_instance().add_event(event);
 
 
             if(_settings.busy)
@@ -550,7 +550,7 @@ setup()
             }
         }
         
-        get_data_processor().create_track("GPU usage", 0, getpid(), std::this_thread::get_id());
+        // get_data_processor().create_track("GPU usage", 0, getpid(), std::this_thread::get_id());
         // get_database().initialize_schema();
         
         // data_storage::queries::table_insert_query query;
