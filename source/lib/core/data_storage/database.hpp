@@ -53,7 +53,11 @@ public:
             auto bind_value = [&](auto value) {
                 using T = decltype(value);
                 if constexpr (std::is_integral_v<T>){
-                    database::validate_sqlite3_result(sqlite3_bind_int(stmt.get(), position, value), "Failed to bind int!");
+                    if(value > (1<<30)) { //if the integer is large (like timestamps), bind to int64
+                        database::validate_sqlite3_result(sqlite3_bind_int64(stmt.get(), position, value), "Failed to bind int64!");
+                    } else {
+                        database::validate_sqlite3_result(sqlite3_bind_int(stmt.get(), position, value), "Failed to bind int!");
+                    }
                 } else if constexpr (std::is_floating_point_v<T>) {
                     database::validate_sqlite3_result(sqlite3_bind_double(stmt.get(), position, value), "Failed to bind double!");
                 } else if constexpr (utils::is_string_literal_v<T>) {

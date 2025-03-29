@@ -25,18 +25,7 @@ FROM
 CREATE VIEW IF NOT EXISTS
     "rocpd_track" AS
 SELECT
-    T.id,
-    (
-        SELECT
-            string
-        FROM
-            rocpd_string
-        WHERE
-            rocpd_string.id = T.name_id
-    ) AS name,
-    T.node_id,
-    T.pid,
-    T.tid
+    *
 FROM
     _rocpd_track T;
 
@@ -694,15 +683,14 @@ GROUP BY
 
 
 --
--- Cpu Freq (PMC)
+-- Simplified Samples View (PMC)
 CREATE VIEW IF NOT EXISTS
-    cpu_freq AS
+    samples_minimal_view AS
 SELECT
     PMC_E.id,
     S.timestamp,
     PMC_I.name AS counter_name,
-    PMC_E.value AS counter_value, 
-    PMC_I.description AS counter_description
+    PMC_E.value AS counter_value
 FROM
     rocpd_pmc_event PMC_E
     INNER JOIN rocpd_pmc PMC_I ON PMC_I.id = PMC_E.pmc_id

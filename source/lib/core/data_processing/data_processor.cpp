@@ -158,9 +158,6 @@ uint32_t data_processor::add_sample(const data_processor::sample_descriptor& sam
                                     const char*    // extdata
                                 >(query);
     }();
-
-    
-    std::cout << "Add sample. Track ID: " << sample.track_id  << ", Timestamp: " << sample.timestamp << std::endl;
     
     uint32_t id = _sample_id++;
     _add_sample_stmt(id, sample.track_id,  sample.timestamp, sample.event_id, sample.extdata);
