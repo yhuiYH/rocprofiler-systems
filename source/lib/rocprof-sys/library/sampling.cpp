@@ -29,6 +29,8 @@
 #include "core/perf.hpp"
 #include "core/state.hpp"
 #include "core/utility.hpp"
+#include "core/data_processing/data_processor.hpp"
+#include "core/data_storage/database.hpp"
 #include "library/components/backtrace.hpp"
 #include "library/components/backtrace_metrics.hpp"
 #include "library/components/backtrace_timestamp.hpp"
@@ -905,6 +907,35 @@ post_process()
     for(auto& itr : get_sampler_allocators())
         if(itr) itr->flush();
 
+     // prepare DB info
+     auto enabled_categories = get_enabled_categories();
+     std::vector<std::string> metrics = {"thread_context_switch", "thread_page_fault", "thread_cpu_time", "thread_peak_memory"};
+
+    std::unordered_map<std::string, uint32_t> track_name_ids;
+    std::unordered_map<std::string, const char*> units;
+    std::unordered_map<std::string, const char*> descriptions;
+
+ 
+    std::cout << "posprocess sampling" << std::endl;
+     auto category_ts_id = data_processor::get_instance().create_string("timer_sampling");
+     auto category_os_id = data_processor::get_instance().create_string("overflow_sampling");
+    
+     for(auto itr : { ROCPROFSYS_PERFETTO_CATEGORIES })
+    {   
+        auto name = std::string(itr.name);
+        if (std::find(metrics.begin(), metrics.end(), name) == metrics.end()) {
+            continue;
+        }
+        uint32_t track_name_id = data_processor::get_instance().create_string(name);
+        track_name_ids[name] = track_name_id;
+        descriptions[name] = itr.description;
+     
+    } 
+    units["thread_context_switch"]   = "1";
+    units["thread_page_fault"]   = "1";
+    units["thread_cpu_time"]   = "sec";
+    units["thread_peak_memory"]   = "MB";  
+
     for(size_t i = 0; i < thread_info::get_peak_num_threads(); ++i)
     {
         auto& _sampler = get_sampler(i);
@@ -974,6 +1005,70 @@ post_process()
 
         _total_data += _data.size();
         _total_threads += (!_data.empty()) ? 1 : 0;
+        
+        // tables for thread, pmc and track (pre-timer data)
+
+        std::string thread_name =  JOIN("", '[', i, ']');
+        uint64_t thread_start = _thread_info -> get_start();
+        uint64_t thread_end = _thread_info -> get_stop();
+         // insert into _rocpd_thread
+        //  struct thread_descriptor {
+        //     uint32_t node_id;
+        //     uint32_t process_id;
+        //     char* name;
+        //     uint64_t start;
+        //     uint64_t end;
+        //     char* extdata;
+        // };
+
+        auto thread_id = data_processor::get_instance().add_thread(
+            data_processor::thread_descriptor{0, 0, thread_name.c_str(), thread_start, thread_end, "{}"});
+        
+       
+        // counter_name |-> (current value, pmc id, track id)
+        std::map<std::string, std::vector<uint64_t>> _helper_counter_basket;
+
+        for (const auto& counter_name : metrics) { // instance per thread
+            
+            //     struct db_pmc_descriptor {
+            //     uint32_t agent_id;
+            //     uint32_t event_code;
+            //     uint32_t instance_id;
+            //     uint32_t is_constant;
+            //     uint32_t is_derived;
+            //     target_arch_t target_arch;
+            //     char* name;
+            //     char* symbol;
+            //     char* description;
+            //     char* long_description;
+            //     char* component;
+            //     char* units;
+            //     value_type_t value_type;
+            //     char* block;
+            //     char* expression;
+            //     char* extdata;
+            // };
+            
+
+            uint64_t pmc_id = data_processor::get_instance()
+            .add_pmc(data_processor::db_pmc_descriptor{0,  0,(i+1), 0, 1, 
+                data_processor::target_arch_t::cpu, counter_name.c_str(),"", descriptions[counter_name], "", "", units[counter_name],  
+                data_processor::value_type_t::abs, "", "", "{}"});
+
+
+                // struct db_track_descriptor {
+                //     uint32_t node_id;      
+                //     uint32_t pid;              
+                //     uint32_t tid;   
+                //     uint32_t name_id; 
+                //     char* extdata;
+                // };
+            uint64_t track_id = data_processor::get_instance().add_track(data_processor::db_track_descriptor{0, 0, thread_id, track_name_ids[counter_name], "{}"});
+
+            _helper_counter_basket[counter_name] = {0, track_id, pmc_id};
+            
+
+        }
 
         if(!_data.empty())
         {
@@ -986,6 +1081,60 @@ post_process()
 
             if(get_use_perfetto()) post_process_perfetto(i, _timer_data, _overflow_data);
             if(get_use_timemory()) post_process_timemory(i, _timer_data, _overflow_data);
+
+             // inserting timer sampling data into DB
+             for (const auto& itr_tdata: _timer_data) {
+
+                _helper_counter_basket["thread_cpu_time"][0] = itr_tdata.m_metrics.get_cpu_timestamp() /units::sec;
+                _helper_counter_basket["thread_context_switch"][0] = itr_tdata.m_metrics.get_context_switches();
+                _helper_counter_basket["thread_page_fault"][0] = itr_tdata.m_metrics.get_page_faults();
+                _helper_counter_basket["thread_peak_memory"][0] = itr_tdata.m_metrics.get_peak_memory() / units::megabyte;
+
+                std::stringstream json_stream;
+                json_stream << "{";
+                json_stream << "\"cpu_time\": " << _helper_counter_basket["thread_cpu_time"][0] << ", ";
+                json_stream << "\"context_switch\": " << _helper_counter_basket["thread_context_switch"][0] << ", ";
+                json_stream << "\"page_fault\": " << _helper_counter_basket["thread_page_fault"][0] << ", ";
+                json_stream << "\"peak_memory\": " << _helper_counter_basket["thread_peak_memory"][0];
+                json_stream << "}";
+                
+                // Get as std::string
+                std::string json_str = json_stream.str();
+                const char* json_cstr = json_str.c_str();
+
+                   // struct db_event_descriptor {
+                   //     uint32_t category_id;
+                   //     uint32_t correlation_id;
+                   //     uint32_t stack_id;
+                   //     uint32_t parent_stack_id;
+                   //     char* args;
+                   //     char* metrics;
+                   //     char* call_stack;
+                   //     char* line_info;
+                   //     char* extdata;
+                   //  };
+
+                   uint64_t event_id =  data_processor::get_instance().add_event(
+                       data_processor::db_event_descriptor({category_ts_id, 0, 0, 0, "{}", json_cstr, "{}", "{}", "{}"}));
+                   
+                   uint64_t _ts =  0.5 * (itr_tdata.m_beg + itr_tdata.m_end); //?? 
+
+                   for (const auto& [counter_name, help_vector] : _helper_counter_basket) {
+                       auto value = help_vector[0];
+                       auto pmc_id = help_vector[1];
+                       auto track_id = help_vector[2];
+
+                       auto pmc_event_id = data_processor::get_instance().add_pmc_event(pmc_id, value, event_id);
+                       // struct sample_descriptor {
+                       //     uint32_t track_id;     
+                       //     uint64_t timestamp;     
+                       //     uint32_t event_id;     
+                       //     const char* extdata;    
+                       // };
+                       auto sample_id = data_processor::get_instance()
+                           .add_sample(data_processor::sample_descriptor({track_id, _ts, event_id, "{}"}));
+                   }
+           }
         }
         else
         {

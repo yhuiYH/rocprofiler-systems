@@ -38,6 +38,17 @@ struct data_processor {
         unknown
     };
 
+    enum class target_arch_t {
+        cpu,
+        gpu
+    };
+
+    enum class value_type_t {
+        abs,
+        accum,
+        relative
+    };
+
     struct agent_descriptor {
         uint64_t id;
         uint32_t node_id;
@@ -65,6 +76,7 @@ struct data_processor {
        const char* line_info;
        const char* extdata;
     };
+
 
     struct track_descriptor {
         std::string name;       
@@ -100,6 +112,55 @@ struct data_processor {
         std::string extdata;
     };
 
+    struct db_pmc_descriptor {
+        uint32_t agent_id;
+        uint32_t event_code;
+        uint32_t instance_id;
+        uint32_t is_constant;
+        uint32_t is_derived;
+        target_arch_t target_arch;
+        const char* name;
+        const char* symbol;
+        const char* description;
+        const char* long_description;
+        const char* component;
+        const char* units;
+        value_type_t value_type;
+        const char* block;
+        const char* expression;
+        const char* extdata;
+    };
+
+    struct thread_descriptor {
+        uint32_t node_id;
+        uint32_t process_id;
+        const char* name;
+        uint64_t start;
+        uint64_t end;
+        const char* extdata;
+    };
+
+    
+    struct db_track_descriptor {
+        uint32_t node_id;      
+        uint32_t pid;              
+        uint32_t tid;   
+        uint32_t name_id; 
+        const char* extdata;
+    };
+
+    struct db_event_descriptor {
+        uint32_t category_id;
+        uint32_t correlation_id;
+        uint32_t stack_id;
+        uint32_t parent_stack_id;
+        const char* args;
+        const char* metrics;
+        const char* call_stack;
+        const char* line_info;
+        const char* extdata;
+     };
+
 
     static data_processor& get_instance();
 
@@ -108,14 +169,23 @@ struct data_processor {
     void create_agent(const agent_descriptor& agent);
     
     uint32_t add_track(const track_descriptor& track);
+
+    uint32_t add_track(const db_track_descriptor& track);
     
     uint32_t add_event(const event_descriptor& event);
+
+    uint32_t add_event(const db_event_descriptor& event);
 
     uint32_t add_sample(const sample_descriptor& sample);
     
     uint32_t add_pmc(const pmc_descriptor& pmc);
+
+    uint32_t add_pmc(const db_pmc_descriptor& pmc);
+
+    uint32_t add_thread(const thread_descriptor& thread);
+
     
-    void add_pmc_event(uint32_t pmc_id, double value, uint32_t event_id = 0);
+    uint32_t add_pmc_event(uint32_t pmc_id, double value, uint32_t event_id = 0);
     
     uint32_t find_pmc_id(const std::string& name);
     uint32_t find_string_id(const std::string& str);
@@ -186,6 +256,8 @@ private:
     uint32_t _sample_id{1};
     uint32_t _event_id{1};
     uint32_t _pmc_id = {1};
+    uint32_t _thread_id = {1};
+    uint32_t _pmc_event_id = {1};
 };
 
 } // namespace rocprofsys

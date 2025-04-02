@@ -428,7 +428,7 @@ data::post_process(uint32_t _dev_id)
             double _usage = itr.m_mem_usage / static_cast<double>(units::megabyte);
 
              // Create event and sample
-             uint32_t event_id = data_processor::get_instance().add_event({ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
+             uint32_t event_id = data_processor::get_instance().add_event(data_processor::event_descriptor{ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
              uint32_t _sample_id = data_processor::get_instance().add_sample({track_id, _ts, event_id, "{}"});
 
             if (busy_id) dp.add_pmc_event(busy_id, _busy, event_id);

@@ -18,6 +18,34 @@ get_agent_type(data_processor::agent_type agent_type) {
     }
 }
 
+static inline constexpr const char*
+get_target_arch_t(data_processor::target_arch_t target_arch) {
+    switch (target_arch)
+    {
+        case data_processor::target_arch_t::cpu:
+            return "CPU";
+
+        case data_processor::target_arch_t::gpu:
+            return "GPU";
+    }
+}
+
+static inline constexpr const char*
+get_value_type_t(data_processor::value_type_t value_type) {
+    switch (value_type)
+    {
+        case data_processor::value_type_t::abs:
+            return "ABS";
+
+        case data_processor::value_type_t::accum:
+            return "ACCUM";
+
+        case data_processor::value_type_t::relative:
+            return "RELATIVE";
+
+    }
+
+}
 }
 
 constexpr char* CATEHORY_NAME_SMI_DEVICE_BUSY = "Device Busy";
@@ -199,7 +227,7 @@ uint32_t data_processor::add_pmc(const pmc_descriptor& pmc) {
     return id;  
 }  
 
-void data_processor::add_pmc_event(uint32_t pmc_id, double value, uint32_t event_id) {
+uint32_t data_processor::add_pmc_event(uint32_t pmc_id, double value, uint32_t event_id) {
     static auto _add_pmc_event_stmt = []() {
         data_storage::queries::table_insert_query query_builder;
         auto query = query_builder.set_table_name("rocpd_pmc_event")
@@ -216,8 +244,36 @@ void data_processor::add_pmc_event(uint32_t pmc_id, double value, uint32_t event
         >(query);
     }();
 
-    static uint32_t _pmc_event_id = 1;
-    _add_pmc_event_stmt(_pmc_event_id++, event_id, pmc_id, value);
+    auto id = _pmc_event_id++;
+    _add_pmc_event_stmt(id, event_id, pmc_id, value);
+    return id;
+}
+
+uint32_t 
+data_processor::add_thread(const data_processor::thread_descriptor& thread) {
+
+    static auto _add_thread_stmt = []() {
+        data_storage::queries::table_insert_query query_builder;
+        auto query = query_builder.set_table_name("_rocpd_thread")
+                                  .set_columns(
+                                      "id", "node_id", "process_id", "name", "start", "end", "extdata")
+                                  .set_values('?', '?', '?', '?', '?', '?', '?')
+                                  .get_query_string();
+        return data_storage::database::get_instance().create_statment_executor<
+                                uint32_t,      // id
+                                uint32_t, //node_id;
+                                uint32_t, //process_id;
+                                const char*, //name;
+                                uint64_t, //start;
+                                uint64_t, //end;
+                                const char* //extdata;
+                            >(query);
+    }();
+    
+    uint32_t id = _thread_id++;
+    _add_thread_stmt(id, thread.node_id, thread.process_id, thread.name, thread.start, thread.end, thread.extdata);
+    
+    return id;
 }
 
 uint32_t data_processor::find_pmc_id(const std::string& name) {
@@ -244,6 +300,114 @@ uint32_t data_processor::find_gpu_agent_id(const int& type_id) {
         return it->second;
     }
     return 0;
+}
+
+
+uint32_t data_processor::add_pmc(const db_pmc_descriptor& pmc) {  
+    static auto _add_pmc_stmt_ = []() {  
+        data_storage::queries::table_insert_query query_builder;  
+        auto query = query_builder.set_table_name("rocpd_pmc")  
+                                  .set_columns(  
+                                      "id", 
+                                      "agent_id", "event_code", "instance_id", "is_constant", "is_derived", 
+                                      "target_arch", "name", "symbol",  "description", "long_description",    
+                                       "component", "units", "value_type", "block", "expression",  
+                                       "extdata")  
+                                  .set_values('?', 
+                                              '?', '?', '?', '?',  '?', 
+                                              '?', '?', '?', '?', '?',   
+                                              '?', '?', '?', '?', '?',  
+                                              '?')  
+                                  .get_query_string();  
+          
+        return data_storage::database::get_instance().create_statment_executor<  
+        uint32_t, //id
+        uint32_t, //agent_id;
+        uint32_t, //event_code;
+        uint32_t, //instance_id;
+        uint32_t,// is_constant;
+        uint32_t, //is_derived;
+        const char*, //target_arch;
+        const char*, //name;
+        const char*, //symbol;
+        const char*, //description;
+        const char*, //long_description;
+        const char*, //component;
+        const char*, //units;
+        const char*,// value_type;
+        const char*, //block;
+        const char*, //expression;
+        const char* //extdata; 
+        >(query);  
+    }(); 
+
+    uint32_t id = _pmc_id++;    
+    _add_pmc_stmt_(id, 
+        pmc.agent_id,  pmc.event_code, pmc.instance_id, pmc.is_constant, pmc.is_derived,
+        get_target_arch_t(pmc.target_arch), pmc.name, pmc.symbol, pmc.description, pmc.long_description, 
+        pmc.component, pmc.units, get_value_type_t(pmc.value_type), pmc.block, pmc.expression, pmc.extdata);
+
+    return id;  
+}  
+
+
+
+uint32_t data_processor::add_event(const data_processor::db_event_descriptor& event) {
+
+    auto _add_event_stmt = []{
+        data_storage::queries::table_insert_query query_builder;
+        auto query = query_builder.set_table_name("rocpd_event")
+                                    .set_columns(
+                                        "id", "category_id", "correlation_id", "stack_id", "parent_stack_id", 
+                                        "args", "metrics", "call_stack", "line_info", "extdata")
+                                    .set_values('?', '?', '?', '?', '?', '?', '?', '?', '?', '?')
+                                    .get_query_string();
+        return data_storage::database::get_instance().create_statment_executor<
+                                    uint64_t,      // id
+                                    uint32_t,           // category_id
+                                    uint32_t,           // correlation_id
+                                    uint32_t,           // stack_id
+                                    uint32_t,           // parent_stack_id
+                                    const char*,   // args
+                                    const char*,   // metrics
+                                    const char*,   // call_stack
+                                    const char*,   // line_info
+                                    const char*    // extdata
+                                >(query);                                           
+    }();
+
+
+    uint32_t id = _event_id++;
+    _add_event_stmt(id, event.category_id, event.correlation_id, event.stack_id, event.parent_stack_id, 
+                    event.args, event.metrics, event.call_stack, event.line_info, event.extdata);
+
+    return id;
+}
+
+uint32_t 
+data_processor::add_track(const data_processor::db_track_descriptor& track) {
+
+    auto _add_track_stmt = []() {
+        data_storage::queries::table_insert_query query_builder;
+        auto query = query_builder.set_table_name("_rocpd_track")
+                                  .set_columns(
+                                      "id", "node_id", "pid", "tid", "name_id", "extdata")
+                                  .set_values('?', '?', '?', '?', '?', '?')
+                                  .get_query_string();
+        return data_storage::database::get_instance().create_statment_executor<
+                                uint32_t,      // id
+                                uint32_t,           // node_id
+                                uint32_t,           // pid
+                                uint32_t,           // tid
+                                uint32_t,           // name_id
+                                const char*    // extdata
+                            >(query);
+    }();
+    
+    uint32_t id = _track_id++;
+    _add_track_stmt(id, track.node_id, track.pid, track.tid, track.name_id, track.extdata);
+    
+    return id;
 }
 
 } // namespace rocprofsys

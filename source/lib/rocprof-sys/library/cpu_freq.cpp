@@ -266,7 +266,7 @@ post_process()
             if(!_thread_info->is_valid_time(_ts)) continue;
             
             // Create event
-            uint32_t cpu_event_id = data_processor::get_instance().add_event({ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
+            uint32_t cpu_event_id = data_processor::get_instance().add_event(data_processor::event_descriptor{ 0, 0, 0, 0, "{}", "{}", "{}", "{}", "{}"});
            
             // Create sample
             uint32_t _sample_id = data_processor::get_instance().add_sample({track_id, _ts, cpu_event_id, "{}"});
