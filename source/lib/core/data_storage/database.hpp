@@ -60,13 +60,10 @@ public:
                         database::validate_sqlite3_result(sqlite3_bind_int(stmt.get(), position, value), "Failed to bind int!");
                     }
                 } else if constexpr (std::is_floating_point_v<T>) {
-                    std::cout << "SSS " << value << std::endl;
                     database::validate_sqlite3_result(sqlite3_bind_double(stmt.get(), position, value), "Failed to bind double!");
                 } else if constexpr (utils::is_string_literal_v<T>) {
-                    std::cout << "SSS " << value << std::endl;
                     database::validate_sqlite3_result(sqlite3_bind_text(stmt.get(), position, value, -1, SQLITE_STATIC), "Failed to bind text!");
                 } else if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
-                    std::cout << "SSS " << value << std::endl;
                     database::validate_sqlite3_result(sqlite3_bind_text(stmt.get(), position, value.c_str(), -1, SQLITE_TRANSIENT), "Failed to bind text!");
                 } else {
                     std::cout << "SSS " << value << std::endl;

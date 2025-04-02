@@ -916,7 +916,6 @@ post_process()
     std::unordered_map<std::string, const char*> descriptions;
 
  
-    std::cout << "posprocess sampling" << std::endl;
      auto category_ts_id = data_processor::get_instance().create_string("timer_sampling");
      auto category_os_id = data_processor::get_instance().create_string("overflow_sampling");
     
